@@ -11,7 +11,7 @@
         {
             _sourcePath = source;
             _replicaPath = replica;
-            this._logger = logger;
+            _logger = logger;
         }
 
         public void Synchronize()
@@ -28,23 +28,38 @@
                 _logger.Log($"Created replica directory: {_replicaPath}");
             }
 
+            var sourceDirs = Directory.GetDirectories(_sourcePath, "*", SearchOption.AllDirectories);
             var sourceFiles = Directory.GetFiles(_sourcePath, "*", SearchOption.AllDirectories);
+            var replicaDirs = Directory.GetDirectories(_replicaPath, "*", SearchOption.AllDirectories);
             var replicaFiles = Directory.GetFiles(_replicaPath, "*", SearchOption.AllDirectories);
 
-            var sourceRelative = new HashSet<string>();
+            var sourceFileSet = new HashSet<string>();
+            var sourceDirSet = new HashSet<string>();
 
+            // Ensure all directories exist in replica
+            foreach (var dir in sourceDirs)
+            {
+                var relative = Path.GetRelativePath(_sourcePath, dir);
+                sourceDirSet.Add(relative);
+
+                var destDir = Path.Combine(_replicaPath, relative);
+
+                if (!Directory.Exists(destDir))
+                {
+                    Directory.CreateDirectory(destDir);
+                    _logger.Log($"Copied directory: {relative}");
+                }
+            }
+
+            // Sync files
             foreach (var file in sourceFiles)
             {
                 var relative = Path.GetRelativePath(_sourcePath, file);
-                sourceRelative.Add(relative);
+                sourceFileSet.Add(relative);
 
                 var destPath = Path.Combine(_replicaPath, relative);
-
-                var action = File.Exists(destPath) ? "Edited" : "Copied";
-
-                Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-
                 var copy = true;
+                var action = File.Exists(destPath) ? "Edited" : "Copied";
 
                 if (File.Exists(destPath))
                 {
@@ -53,7 +68,6 @@
 
                     if (sourceInfo.Length == destInfo.Length)
                     {
-                        // Use hash if files are large or suspect differences
                         var hash1 = _hasher.GetHash(file);
                         var hash2 = _hasher.GetHash(destPath);
                         copy = hash1 != hash2;
@@ -62,6 +76,7 @@
 
                 if (copy)
                 {
+                    Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
                     File.Copy(file, destPath, true);
                     _logger.Log($"{action}: {relative}");
                 }
@@ -72,10 +87,22 @@
             {
                 var relative = Path.GetRelativePath(_replicaPath, file);
 
-                if (!sourceRelative.Contains(relative))
+                if (!sourceFileSet.Contains(relative))
                 {
                     File.Delete(file);
-                    _logger.Log($"Deleted: {relative}");
+                    _logger.Log($"Deleted file: {relative}");
+                }
+            }
+
+            // Delete directories not in source
+            foreach (var dir in replicaDirs.OrderByDescending(d => d.Length))
+            {
+                var relative = Path.GetRelativePath(_replicaPath, dir);
+
+                if (!sourceDirSet.Contains(relative))
+                {
+                    Directory.Delete(dir, true);
+                    _logger.Log($"Deleted directory: {relative}");
                 }
             }
         }
